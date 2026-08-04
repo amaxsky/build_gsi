@@ -38,12 +38,12 @@ jobs:
         cd ~/aosp9
         repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc)
 
-    - name: Clone phh treble_experimentations
+    - name: Clone TrebleDroid
       run: |
         cd ~/aosp9/device
         mkdir -p phh
         cd phh
-        git clone --depth=1 https://github.com/phhusson/treble_experimentations.git treble
+        git clone --depth=1 https://github.com/TrebleDroid/treble_droid.git treble
         ls -R treble
         
     - name: Generate GSI device config
