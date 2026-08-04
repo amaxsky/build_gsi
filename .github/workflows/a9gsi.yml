@@ -43,8 +43,9 @@ jobs:
         cd ~/aosp9/device
         mkdir -p phh
         cd phh
-        git clone https://github.com/phhusson/treble_experimentations.git treble
-
+        git clone --depth=1 https://github.com/phhusson/treble_experimentations.git treble
+        ls -R treble
+        
     - name: Generate GSI device config
       run: |
         cd ~/aosp9/device/phh/treble
