@@ -42,6 +42,11 @@ jobs:
       timeout-minutes: 360
       run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
+    - name: 检查可用目标
+      run: |
+       source build/envsetup.sh
+       lunch 2>&1 
+
     - name: 构建 GSI
       timeout-minutes: 360
       run: |
