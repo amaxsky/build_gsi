@@ -22,6 +22,12 @@ jobs:
         rm -rf /__t /__w/_temp /__w/_actions 2>/dev/null || true
         df -h
 
+    - name: 设置 HOME
+      run: |
+        mkdir -p /github/home
+        export HOME=/github/home
+        echo "HOME=/github/home" >> $GITHUB_ENV
+
     - name: 安装依赖包
       run: |
         apt-get update
