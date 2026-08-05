@@ -25,52 +25,20 @@ jobs:
         git config --global user.email "action@github.com"
         git config --global user.name "GitHub Action"
 
-    - name: Initialize AOSP with android11-gsi branch
+    - name: Initialize and sync full AOSP
       run: |
         mkdir -p ~/aosp
         cd ~/aosp
         repo init -u https://android.googlesource.com/platform/manifest -b android11-gsi --depth=1
-        
-    - name: Sync required directories
-      run: |
-        cd ~/aosp
-        # 只同步在 Android 11 中确实存在的项目
-        repo sync -c --no-tags --no-clone-bundle -j$(nproc) \
-          platform/build \
-          platform/device/generic/gsi \
-          platform/device/generic/common \
-          platform/device/gsi \
-          platform/vendor/gsi \
-          platform/prebuilts/build-tools \
-          platform/system/core \
-          platform/frameworks/base \
-          platform/external/boringssl \
-          platform/bionic
+        # 同步完整仓库
+        repo sync -c --no-tags --no-clone-bundle -j$(nproc)
 
     - name: Show raw lunch output
       run: |
         cd ~/aosp
-        # 检查 build/envsetup.sh 是否存在
-        if [ -f "build/envsetup.sh" ]; then
-          echo "✅ build/envsetup.sh found"
-          source build/envsetup.sh
-          echo ""
-          echo "=========================================="
-          echo "📋 RAW LUNCH OUTPUT"
-          echo "=========================================="
-          lunch
-        else
-          echo "❌ build/envsetup.sh NOT found"
-          echo ""
-          echo "Current directory structure:"
-          ls -la
-          echo ""
-          echo "Checking if build directory exists:"
-          if [ -d "build" ]; then
-            echo "build directory exists, contents:"
-            ls -la build/ | head -20
-          else
-            echo "build directory does NOT exist"
-          fi
-          exit 1
-        fi
+        source build/envsetup.sh
+        echo ""
+        echo "=========================================="
+        echo "📋 RAW LUNCH OUTPUT"
+        echo "=========================================="
+        lunch
