@@ -28,57 +28,9 @@ env:
   MANIFEST_URL: https://android.googlesource.com/platform/manifest
 
 jobs:
-  list-targets:
-    name: List available lunch targets
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Setup build environment
-      run: |
-        sudo apt-get update
-        # 安装基本依赖，跳过不存在的包
-        sudo apt-get install -y \
-          git-core gnupg flex bison build-essential \
-          zip curl zlib1g-dev gcc-multilib g++-multilib \
-          libc6-dev-i386 lib32z1-dev \
-          x11proto-core-dev libx11-dev \
-          libgl1-mesa-dev libxml2-utils xsltproc unzip \
-          fontconfig python3 python3-pip \
-          libssl-dev bc rsync cpio || true
-        
-        # 对于 Ubuntu 22.04，ncurses 包名可能不同
-        sudo apt-get install -y libncurses5 libncurses-dev lib32ncurses-dev 2>/dev/null || \
-        sudo apt-get install -y libncurses6 libncurses-dev 2>/dev/null || true
-        
-        mkdir -p ~/bin
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo "$HOME/bin" >> $GITHUB_PATH
-
-    - name: Initialize and sync minimal repo
-      run: |
-        mkdir -p android-gsi
-        cd android-gsi
-        repo init -u ${{ env.MANIFEST_URL }} -b ${{ env.BRANCH_NAME }} --depth=1
-        repo sync -c -j4 --no-tags --no-clone-bundle build/ device/ 2>/dev/null || true
-        
-    - name: List lunch targets
-      run: |
-        cd android-gsi
-        source build/envsetup.sh
-        echo "========================================="
-        echo "Available lunch targets:"
-        echo "========================================="
-        lunch 2>&1 | head -50 || true
-        echo "========================================="
-        echo "GSI-related targets:"
-        echo "========================================="
-        lunch 2>&1 | grep -iE "(gsi|generic|aosp)" | head -20 || true
-
   build:
     name: Build system.img (${{ github.event.inputs.arch }}-${{ github.event.inputs.variant }})
     runs-on: ubuntu-22.04
-    needs: list-targets
     
     steps:
     - name: Checkout code
@@ -99,47 +51,46 @@ jobs:
           libgl1-mesa-dev libxml2-utils xsltproc unzip \
           fontconfig python3 python3-pip \
           libssl-dev bc dosfstools mtools \
-          rsync cpio schedtool || true
+          rsync cpio schedtool openjdk-11-jdk || true
         
-        # 尝试安装 ncurses 相关库
+        # 尝试安装 ncurses 相关库（不同 Ubuntu 版本包名不同）
         sudo apt-get install -y libncurses5 2>/dev/null || \
         sudo apt-get install -y libncurses6 2>/dev/null || true
         
         sudo apt-get install -y libncurses-dev 2>/dev/null || true
         sudo apt-get install -y lib32ncurses-dev 2>/dev/null || true
         
-        # Ubuntu 22.04 没有 python2，需要创建软链接或设置
+        # 创建 python 软链接
         if ! command -v python &> /dev/null; then
           sudo ln -s /usr/bin/python3 /usr/bin/python
-        fi
-        
-        # 设置 Python 2 兼容性（如果编译脚本需要）
-        if ! command -v python2 &> /dev/null; then
-          echo "python2 not found, creating alias"
-          echo 'alias python2=python3' >> ~/.bashrc
         fi
         
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         
+        # 下载和安装 repo 工具
         mkdir -p ~/bin
         curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
         
+        # 验证 repo 是否可用
+        ~/bin/repo --version || echo "Repo installation check"
+        
         # 显示系统信息
         echo "========================================="
         echo "System information:"
         echo "========================================="
-        lsb_release -a 2>/dev/null || cat /etc/os-release
+        cat /etc/os-release | head -5
         uname -a
+        java -version 2>&1 || echo "Java not found"
         python3 --version
         free -h
         df -h
 
     - name: Setup swap
       run: |
-        # 创建 swap 文件，增加可用内存
+        # 创建 swap 文件
         sudo fallocate -l 16G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
@@ -174,70 +125,129 @@ jobs:
         echo "TARGET=$TARGET" >> $GITHUB_ENV
         echo "Lunch target: ${TARGET}-${{ github.event.inputs.variant }}"
 
-    - name: Cache repo
-      uses: actions/cache@v3
-      with:
-        path: |
-          android-gsi/.repo
-          android-gsi/prebuilts
-        key: repo-${{ env.BRANCH_NAME }}-v2-${{ github.run_id }}
-        restore-keys: |
-          repo-${{ env.BRANCH_NAME }}-v2-
-
-    - name: Initialize repo
-      run: |
-        mkdir -p android-gsi
-        cd android-gsi
-        repo init -u ${{ env.MANIFEST_URL }} -b ${{ env.BRANCH_NAME }} --depth=1
-        echo "Repo initialized at $(date)"
-
-    - name: Sync repo
+    - name: Initialize and sync repo
       timeout-minutes: 120
       run: |
+        echo "Creating android-gsi directory..."
+        mkdir -p android-gsi
         cd android-gsi
-        echo "Starting repo sync at $(date)"
-        repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync --fail-fast
+        
+        echo "Current directory: $(pwd)"
+        echo "Initializing repo..."
+        
+        # 初始化 repo，如果失败则重试
+        if ! repo init -u ${{ env.MANIFEST_URL }} -b ${{ env.BRANCH_NAME }} --depth=1; then
+          echo "First attempt failed, retrying..."
+          sleep 10
+          repo init -u ${{ env.MANIFEST_URL }} -b ${{ env.BRANCH_NAME }} --depth=1
+        fi
+        
+        echo "Repo initialized at $(date)"
+        echo "Starting repo sync..."
+        
+        # 同步代码
+        if ! repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync; then
+          echo "Sync failed, retrying once..."
+          sleep 10
+          repo sync -c -j4 --no-tags --no-clone-bundle --force-sync
+        fi
+        
         echo "Repo sync completed at $(date)"
+        
+        # 验证关键文件存在
+        echo "========================================="
+        echo "Verifying repository structure:"
+        echo "========================================="
+        if [ -f "build/envsetup.sh" ]; then
+          echo "✓ build/envsetup.sh found"
+        else
+          echo "✗ build/envsetup.sh NOT found!"
+          echo "Current directory contents:"
+          ls -la
+          echo "Build directory:"
+          ls -la build/ 2>/dev/null || echo "build/ directory not found"
+          exit 1
+        fi
+        
         df -h
-        echo "Disk usage:"
-        du -sh android-gsi/
+        echo "Repository size:"
+        du -sh . 2>/dev/null || echo "Cannot calculate size"
+
+    - name: List available lunch targets
+      run: |
+        cd android-gsi
+        if [ ! -f "build/envsetup.sh" ]; then
+          echo "Error: build/envsetup.sh not found!"
+          exit 1
+        fi
+        
+        source build/envsetup.sh
+        echo "========================================="
+        echo "Available lunch targets:"
+        echo "========================================="
+        lunch 2>&1 | head -50 || true
+        echo "========================================="
+        echo "GSI-related targets:"
+        echo "========================================="
+        lunch 2>&1 | grep -iE "(gsi|generic|aosp)" | head -20 || true
 
     - name: Apply Android 10 fixes for Ubuntu 22.04
       run: |
         cd android-gsi
         
-        # 设置环境变量以兼容新版本工具链
+        echo "Applying compatibility fixes..."
+        
+        # 设置环境变量
         export LC_ALL=C
-        export PYTHONDONTWRITEBYTECODE=1
         
-        # 如果 build/soong 使用 python2，需要修改
+        # 修复 Python 引用
         if [ -f "build/soong/scripts/jar-wrapper.sh" ]; then
-          sed -i 's/python/python3/g' build/soong/scripts/jar-wrapper.sh 2>/dev/null || true
+          echo "Fixing Python references in jar-wrapper.sh"
+          sed -i 's/python /python3 /g' build/soong/scripts/jar-wrapper.sh 2>/dev/null || true
         fi
         
-        # 处理可能的 OpenJDK 版本问题
+        # 修复 JDK 版本检测
         if [ -f "build/make/core/config.mk" ]; then
-          # 移除对特定 JDK 版本的严格要求
-          sed -i 's/EXPERIMENTAL_USE_OPENJDK11/EXPERIMENTAL_USE_OPENJDK11 := true/g' build/make/core/config.mk 2>/dev/null || true
+          echo "Setting JDK 11 compatibility"
+          echo "EXPERIMENTAL_USE_OPENJDK11 := true" >> build/make/core/config.mk
         fi
         
-        echo "Applied compatibility fixes"
+        # 修复可能的编译脚本 Python 版本问题
+        find . -name "*.py" -type f -exec sed -i 's/#!/usr/bin/env python$/&3/' {} \; 2>/dev/null || true
+        
+        echo "Compatibility fixes applied"
 
     - name: Build system.img
       timeout-minutes: 360
       run: |
         cd android-gsi
         
+        # 验证关键文件
+        if [ ! -f "build/envsetup.sh" ]; then
+          echo "Error: build/envsetup.sh still not found!"
+          echo "Directory contents:"
+          ls -la
+          exit 1
+        fi
+        
         # 设置环境变量
         export LC_ALL=C
         export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
         export ANDROID_JAVA_HOME=$JAVA_HOME
+        export PYTHONDONTWRITEBYTECODE=1
         
+        echo "Java version:"
+        java -version 2>&1
+        
+        echo "Setting up build environment..."
         source build/envsetup.sh
+        
+        echo "Running lunch..."
         lunch ${{ env.TARGET }}-${{ github.event.inputs.variant }}
         
-        echo "Starting build at $(date)"
-        echo "Build type: systemimage only"
+        echo "========================================="
+        echo "Starting system.img build at $(date)"
+        echo "========================================="
         
         # 只编译 systemimage
         if make systemimage -j$(nproc) 2>&1 | tee build.log; then
@@ -251,19 +261,16 @@ jobs:
           echo "Last 100 lines of build log:"
           tail -100 build.log
           
-          # 检查常见问题
+          # 诊断信息
           echo "========================================="
-          echo "Checking for common issues:"
+          echo "Build diagnostics:"
           echo "========================================="
-          
-          # 检查 JDK 版本
-          java -version 2>&1 || echo "Java not found"
-          
-          # 检查 Python 版本
-          python3 --version
-          
-          # 检查磁盘空间
           df -h
+          free -h
+          
+          # 查找可能的错误
+          echo "Checking for common errors:"
+          grep -i "error" build.log | tail -20 || echo "No errors found in log"
           
           exit 1
         fi
@@ -271,20 +278,34 @@ jobs:
     - name: Find and verify system.img
       run: |
         cd android-gsi
+        
+        echo "========================================="
         echo "Looking for system.img..."
+        echo "========================================="
         
-        # 查找生成的镜像文件
-        find out/target/product -name "*.img" -type f -exec ls -lh {} \;
+        # 检查编译输出目录
+        if [ ! -d "out/target/product" ]; then
+          echo "Error: out/target/product directory not found!"
+          echo "Out directory contents:"
+          ls -la out/ 2>/dev/null || echo "out/ directory not found"
+          exit 1
+        fi
         
+        # 列出所有生成的镜像
+        echo "All generated images:"
+        find out/target/product -name "*.img" -type f -exec ls -lh {} \; 2>/dev/null || echo "No images found"
+        
+        # 查找 system.img
         IMG_PATH=$(find out/target/product -name "system.img" -type f | head -1)
+        
         if [ -z "$IMG_PATH" ]; then
           echo "========================================="
           echo "Error: system.img not found!"
           echo "========================================="
-          echo "Contents of out directory:"
-          find out/target/product -type f 2>/dev/null | head -30
           echo "Directory structure:"
-          find out/target/product -maxdepth 2 -type d 2>/dev/null
+          find out/target/product -maxdepth 3 -type d 2>/dev/null
+          echo "Files in product directory:"
+          find out/target/product -type f 2>/dev/null | head -30
           exit 1
         fi
         
@@ -297,17 +318,29 @@ jobs:
     - name: Compress system.img
       run: |
         IMG_PATH="${{ env.IMG_PATH }}"
+        
+        if [ ! -f "$IMG_PATH" ]; then
+          echo "Error: Cannot find system.img at $IMG_PATH"
+          exit 1
+        fi
+        
         echo "Compressing system image..."
-        echo "Original: $(ls -lh $IMG_PATH | awk '{print $5}')"
+        echo "Original size: $(du -h $IMG_PATH | cut -f1)"
         
         # 使用 xz 压缩
-        xz -z -k -9 -T 0 "$IMG_PATH" 2>/dev/null || xz -z "$IMG_PATH"
-        
-        if [ -f "${IMG_PATH}.xz" ]; then
-          echo "Compressed: $(ls -lh ${IMG_PATH}.xz | awk '{print $5}')"
-          echo "XZ_PATH=${IMG_PATH}.xz" >> $GITHUB_ENV
+        if xz -z -k -9 -T 0 "$IMG_PATH" 2>/dev/null; then
+          COMPRESSED="${IMG_PATH}.xz"
         else
-          echo "Compression failed, using original file"
+          echo "Multi-threaded compression failed, using single thread..."
+          xz -z "$IMG_PATH"
+          COMPRESSED="${IMG_PATH}.xz"
+        fi
+        
+        if [ -f "$COMPRESSED" ]; then
+          echo "Compressed size: $(du -h $COMPRESSED | cut -f1)"
+          echo "XZ_PATH=$COMPRESSED" >> $GITHUB_ENV
+        else
+          echo "Warning: Compression failed, using original file"
           echo "XZ_PATH=$IMG_PATH" >> $GITHUB_ENV
         fi
 
@@ -317,9 +350,9 @@ jobs:
         name: system-${{ github.event.inputs.arch }}-${{ github.event.inputs.variant }}
         path: ${{ env.XZ_PATH }}
         retention-days: 7
-        compression-level: 0  # 已经压缩过了
+        compression-level: 0
 
-    - name: Generate build info
+    - name: Generate and upload build info
       run: |
         cd android-gsi
         IMG_PATH="${{ env.IMG_PATH }}"
@@ -334,20 +367,22 @@ jobs:
         GitHub Run ID: ${{ github.run_id }}
         Lunch Target: ${{ env.TARGET }}-${{ github.event.inputs.variant }}
         System Image: $(basename $IMG_PATH)
-        System Image Size: $(du -h $IMG_PATH | cut -f1)
-        System Image MD5: $(md5sum $IMG_PATH | cut -d' ' -f1)
+        System Image Size: $(du -h $IMG_PATH 2>/dev/null | cut -f1)
+        System Image MD5: $(md5sum $IMG_PATH 2>/dev/null | cut -d' ' -f1)
         EOF
         
         echo "========================================="
         echo "Build Information:"
         echo "========================================="
         cat build-info.txt
+        
+        echo "BUILD_INFO_PATH=build-info.txt" >> $GITHUB_ENV
 
     - name: Upload build info
       uses: actions/upload-artifact@v4
       with:
         name: build-info-${{ github.event.inputs.arch }}-${{ github.event.inputs.variant }}
-        path: android-gsi/build-info.txt
+        path: build-info.txt
 
     - name: Cleanup
       if: always()
