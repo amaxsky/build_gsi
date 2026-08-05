@@ -18,10 +18,10 @@ on:
         required: true
         type: choice
         options:
+          - eng
           - userdebug
           - user
-          - eng
-        default: 'userdebug'
+        default: 'eng'
 
 env:
   BRANCH_NAME: android10-gsi
@@ -39,21 +39,27 @@ jobs:
         sudo dpkg --add-architecture i386
         sudo apt-get update
         
-        # 安装依赖包
+        # 安装依赖包（包括 Python 2）
         sudo apt-get install -y \
           git-core gnupg flex bison build-essential \
           zip curl zlib1g-dev gcc-multilib g++-multilib \
           libc6-dev-i386 lib32z1-dev \
           x11proto-core-dev libx11-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip \
-          fontconfig python3 python3-pip \
+          fontconfig python3 python3-pip python2 \
           libssl-dev bc dosfstools mtools \
           rsync cpio schedtool openjdk-11-jdk \
           libncurses5 libncurses-dev lib32ncurses-dev 2>/dev/null || true
         
-        # 创建 python 软链接
-        if [ ! -f /usr/bin/python ]; then
-          sudo ln -s /usr/bin/python3 /usr/bin/python
+        # 确保 python 指向 python2（Android 10 需要）
+        if [ -f /usr/bin/python2 ]; then
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
+          echo "Python version:"
+          python --version
+        else
+          echo "Warning: python2 not available"
+          # 如果没有 python2，创建兼容脚本
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
         fi
         
         # 配置 git
@@ -71,7 +77,8 @@ jobs:
         cat /etc/os-release | head -3
         uname -a
         java -version 2>&1 || true
-        python3 --version
+        python --version 2>&1 || true
+        python3 --version 2>&1 || true
         free -h
         df -h
 
@@ -118,6 +125,7 @@ jobs:
         echo "Build Configuration:"
         echo "  Architecture: ${{ github.event.inputs.arch }}"
         echo "  Variant: ${{ github.event.inputs.variant }}"
+        echo "  Target: $TARGET-${{ github.event.inputs.variant }}"
         echo "  Branch: ${{ env.BRANCH_NAME }}"
 
     - name: Initialize and sync repo
@@ -165,25 +173,63 @@ jobs:
         echo "=== Available Lunch Targets ==="
         lunch 2>&1 | head -50 || true
 
-    - name: Apply compatibility fixes
+    - name: Fix Python 2/3 compatibility
       run: |
         cd android-gsi
         
-        echo "Applying compatibility fixes for Ubuntu 22.04..."
+        echo "Fixing Python 2/3 compatibility issues..."
         
-        # 修复 Python 脚本
-        find build/ -name "*.py" -type f -exec sed -i 's|#!/usr/bin/env python$|#!/usr/bin/env python3|' {} \; 2>/dev/null || true
-        find build/ -name "*.sh" -type f -exec sed -i 's|python |python3 |g' {} \; 2>/dev/null || true
+        # 检查 Python 版本
+        PYTHON_VERSION=$(python --version 2>&1)
+        echo "Using Python: $PYTHON_VERSION"
+        
+        # 如果是 Python 3，修复 print 语句
+        if echo "$PYTHON_VERSION" | grep -q "Python 3"; then
+          echo "Applying Python 3 fixes..."
+          
+          # 修复 normalize_path.py
+          if [ -f "build/make/tools/normalize_path.py" ]; then
+            echo "Fixing build/make/tools/normalize_path.py"
+            # 将 print 语句转换为 print 函数
+            sed -i 's/print \(.*\)/print(\1)/' build/make/tools/normalize_path.py
+            # 确保有 from __future__ import print_function
+            sed -i '1i from __future__ import print_function' build/make/tools/normalize_path.py
+          fi
+          
+          # 修复其他可能的 Python 2 脚本
+          find build/ -name "*.py" -type f | while read file; do
+            # 添加 print_function 导入
+            if ! grep -q "from __future__ import print_function" "$file" 2>/dev/null; then
+              if grep -q "^[[:space:]]*print " "$file" 2>/dev/null; then
+                echo "Fixing: $file"
+                sed -i '1s/^/from __future__ import print_function\n/' "$file"
+                sed -i 's/^\([[:space:]]*\)print \(.*\)/\1print(\2)/' "$file"
+              fi
+            fi
+          done
+        else
+          echo "Python 2 detected, no fixes needed"
+        fi
+        
+        echo "Python compatibility fixes applied"
+
+    - name: Apply additional Android 10 fixes
+      run: |
+        cd android-gsi
+        
+        echo "Applying additional fixes..."
         
         # 设置 JDK 11
-        mkdir -p build/make/core
         if [ -f "build/make/core/config.mk" ]; then
           if ! grep -q "EXPERIMENTAL_USE_OPENJDK11" build/make/core/config.mk; then
             echo "EXPERIMENTAL_USE_OPENJDK11 := true" >> build/make/core/config.mk
           fi
         fi
         
-        echo "Fixes applied"
+        # 修复 bytes/str 问题（Python 3）
+        find build/ -name "*.py" -type f -exec sed -i 's/\([a-zA-Z_]*\)\.decode("hex")/bytes.fromhex(\1)/g' {} \; 2>/dev/null || true
+        
+        echo "Additional fixes applied"
 
     - name: Build system.img
       timeout-minutes: 360
@@ -196,9 +242,16 @@ jobs:
         export ANDROID_JAVA_HOME=$JAVA_HOME
         export PYTHONDONTWRITEBYTECODE=1
         
+        # 确保使用正确的 Python
+        if [ -f /usr/bin/python2 ]; then
+          export PATH=/usr/bin:$PATH
+          echo "Using Python 2 for build"
+        fi
+        
         echo "Build Environment:"
         echo "  Java: $(java -version 2>&1 | head -1)"
-        echo "  Python: $(python3 --version)"
+        echo "  Python: $(python --version 2>&1)"
+        echo "  Python3: $(python3 --version 2>&1)"
         echo "  Cores: $(nproc)"
         echo "  Target: ${{ env.TARGET }}-${{ github.event.inputs.variant }}"
         
