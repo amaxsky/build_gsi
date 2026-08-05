@@ -41,6 +41,7 @@ jobs:
       run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
     - name: 构建 GSI (aosp_arm64-eng)
+      shell: bash
       timeout-minutes: 360
       run: |
         source build/envsetup.sh
