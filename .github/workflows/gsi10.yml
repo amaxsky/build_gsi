@@ -1,0 +1,213 @@
+name: Build Android 10 GSI (system.img)
+
+on:
+  workflow_dispatch:  # 只允许手动触发
+    inputs:
+      arch:
+        description: '选择目标架构'
+        required: true
+        type: choice
+        options:
+          - arm64
+          - x86_64
+          - arm
+          - x86
+        default: 'arm64'
+      variant:
+        description: '选择构建变体'
+        required: true
+        type: choice
+        options:
+          - userdebug
+          - user
+          - eng
+        default: 'userdebug'
+
+env:
+  BRANCH_NAME: android10-gsi
+  MANIFEST_URL: https://android.googlesource.com/platform/manifest
+
+jobs:
+  list-targets:
+    name: List available lunch targets
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Setup build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git-core gnupg flex bison build-essential \
+          zip curl zlib1g-dev gcc-multilib g++-multilib \
+          libc6-dev-i386 libncurses5 lib32ncurses5-dev \
+          x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+          python3 python3-pip
+        
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Initialize and sync repo
+      run: |
+        mkdir -p android-gsi
+        cd android-gsi
+        repo init -u ${{ env.MANIFEST_URL }} -b ${{ env.BRANCH_NAME }} --depth=1
+        # 只同步必要的仓库来获取 lunch 菜单
+        repo sync -c -j4 --no-tags --no-clone-bundle build/ device/ 2>/dev/null || true
+        
+    - name: List lunch targets
+      run: |
+        cd android-gsi
+        source build/envsetup.sh
+        echo "========================================="
+        echo "Available lunch targets:"
+        echo "========================================="
+        lunch 2>&1 | grep -E "^\s+[0-9]+\." | head -30 || true
+        echo "========================================="
+        echo "GSI-related targets:"
+        echo "========================================="
+        lunch 2>&1 | grep -iE "(gsi|generic|aosp)" | head -20 || true
+
+  build:
+    name: Build system.img (${{ github.event.inputs.arch }}-${{ github.event.inputs.variant }})
+    runs-on: ubuntu-latest
+    needs: list-targets  # 先列出目标，再编译
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential \
+          zip curl zlib1g-dev gcc-multilib g++-multilib \
+          libc6-dev-i386 libncurses5 lib32ncurses5-dev \
+          x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip \
+          fontconfig python3 python3-pip
+        
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Setup swap
+      run: |
+        sudo fallocate -l 12G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        echo "Swap setup complete"
+        free -h
+
+    - name: Show build configuration
+      run: |
+        echo "========================================="
+        echo "Build Configuration:"
+        echo "Architecture: ${{ github.event.inputs.arch }}"
+        echo "Variant: ${{ github.event.inputs.variant }}"
+        echo "Branch: ${{ env.BRANCH_NAME }}"
+        echo "========================================="
+        
+        # 根据架构确定 lunch 目标
+        case "${{ github.event.inputs.arch }}" in
+          arm64)
+            TARGET="aosp_arm64"
+            ;;
+          x86_64)
+            TARGET="aosp_x86_64"
+            ;;
+          arm)
+            TARGET="aosp_arm"
+            ;;
+          x86)
+            TARGET="aosp_x86"
+            ;;
+        esac
+        
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
+        echo "Lunch target: ${TARGET}-${{ github.event.inputs.variant }}"
+
+    - name: Initialize repo
+      run: |
+        mkdir -p android-gsi
+        cd android-gsi
+        repo init -u ${{ env.MANIFEST_URL }} -b ${{ env.BRANCH_NAME }} --depth=1
+        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+
+    - name: Build system.img
+      run: |
+        cd android-gsi
+        source build/envsetup.sh
+        lunch ${{ env.TARGET }}-${{ github.event.inputs.variant }}
+        
+        echo "Starting build at $(date)"
+        # 只编译 systemimage
+        make systemimage -j$(nproc)
+        echo "Build finished at $(date)"
+
+    - name: Find and verify system.img
+      run: |
+        cd android-gsi
+        echo "Looking for system.img..."
+        find out/target/product -name "system.img" -type f -exec ls -lh {} \;
+        
+        IMG_PATH=$(find out/target/product -name "system.img" -type f | head -1)
+        if [ -z "$IMG_PATH" ]; then
+          echo "Error: system.img not found!"
+          exit 1
+        fi
+        
+        echo "System image found: $IMG_PATH"
+        echo "IMG_PATH=$IMG_PATH" >> $GITHUB_ENV
+
+    - name: Compress system.img
+      run: |
+        IMG_PATH="${{ env.IMG_PATH }}"
+        echo "Compressing: $IMG_PATH"
+        xz -z -k -9 -T 0 "$IMG_PATH"
+        echo "XZ_PATH=${IMG_PATH}.xz" >> $GITHUB_ENV
+        
+        # 显示文件大小
+        ls -lh "${IMG_PATH}.xz"
+
+    - name: Upload system.img artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: system-${{ github.event.inputs.arch }}-${{ github.event.inputs.variant }}
+        path: ${{ env.XZ_PATH }}
+        retention-days: 7
+
+    - name: Generate build info
+      run: |
+        cat > build-info.txt << EOF
+        Android 10 GSI Build Information
+        ================================
+        Architecture: ${{ github.event.inputs.arch }}
+        Variant: ${{ github.event.inputs.variant }}
+        Branch: ${{ env.BRANCH_NAME }}
+        Build Date: $(date -u)
+        GitHub Run ID: ${{ github.run_id }}
+        EOF
+        
+        echo "BUILD_INFO=build-info.txt" >> $GITHUB_ENV
+
+    - name: Upload build info
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-info-${{ github.event.inputs.arch }}
+        path: build-info.txt
+
+    - name: Cleanup
+      if: always()
+      run: |
+        cd android-gsi
+        echo "Cleaning up out directory to free space..."
+        rm -rf out/
+        df -h
