@@ -11,46 +11,32 @@ env:
 jobs:
   build:
     name: Build Android 9 GSI
-    runs-on: ubuntu-latest
-    container:
-      image: ubuntu:20.04
+    runs-on: ubuntu-22.04
     
     steps:
-    - name: 清理磁盘空间
-      run: |
-        df -h
-        rm -rf /__t /__w/_temp /__w/_actions 2>/dev/null || true
-        df -h
-
     - name: 安装依赖包
       run: |
-        apt-get update
-        apt-get install -y \
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
           git-core gnupg flex bison build-essential zip curl \
-          zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
+          zlib1g-dev libc6-dev-i386 libncurses6 x11proto-core-dev \
           libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
-          xsltproc unzip fontconfig python python3 openjdk-8-jdk
-
-    - name: 安装 repo
-      run: |
-        curl https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
-        chmod +x /usr/local/bin/repo
+          xsltproc unzip fontconfig python3 openjdk-8-jdk repo
+        # 安装 Python 2
+        sudo add-apt-repository -y ppa:deadsnakes/ppa
+        sudo apt-get update
+        sudo apt-get install -y python2
+        sudo ln -sf /usr/bin/python2 /usr/bin/python
 
     - name: 初始化 Repo (pie-gsi 分支)
       run: |
-        export HOME=/root
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
         repo init --depth=1 \
           -u https://android.googlesource.com/platform/manifest \
           -b ${{ env.AOSP_BRANCH }}
 
-    - name: 同步源代码（精简）
+    - name: 同步源代码
       timeout-minutes: 120
-      run: |
-        export HOME=/root
-        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
-        df -h
+      run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
     - name: 构建 GSI (仅 system.img)
       shell: bash
