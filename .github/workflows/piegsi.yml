@@ -9,6 +9,7 @@ env:
   TZ: Etc/UTC
   LC_ALL: C
   LANG: C
+  LANGUAGE: C
 
 jobs:
   build:
@@ -26,13 +27,18 @@ jobs:
           xsltproc unzip fontconfig python3 openjdk-8-jdk repo \
           libtinfo5 libncurses5 locales
         sudo locale-gen en_US.UTF-8
-        # 安装 Python 2
         sudo add-apt-repository -y ppa:deadsnakes/ppa
         sudo apt-get update
         sudo apt-get install -y python2
         sudo ln -sf /usr/bin/python2 /usr/bin/python
 
-    - name: 初始化 Repo (pie-gsi 分支)
+    - name: 替换预编译 flex
+      run: |
+        # 用系统 flex 替换 AOSP 预编译的 flex（版本太老，不兼容 22.04）
+        rm -f prebuilts/misc/linux-x86/flex/flex-2.5.39
+        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
+
+    - name: 初始化 Repo
       run: |
         repo init --depth=1 \
           -u https://android.googlesource.com/platform/manifest \
@@ -42,7 +48,7 @@ jobs:
       timeout-minutes: 120
       run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
-    - name: 构建 GSI (仅 system.img)
+    - name: 构建 GSI
       shell: bash
       timeout-minutes: 240
       run: |
