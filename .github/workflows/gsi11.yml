@@ -1,11 +1,7 @@
 name: Check Android 11 GSI Build Targets (android11-gsi)
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch:  # 只允许手动触发
 
 jobs:
   check-targets:
@@ -34,23 +30,50 @@ jobs:
         mkdir -p ~/aosp
         cd ~/aosp
         repo init -u https://android.googlesource.com/platform/manifest -b android11-gsi --depth=1
-        repo sync -c --no-tags --no-clone-bundle -j$(nproc) --fail-fast \
+        
+    - name: Sync required directories
+      run: |
+        cd ~/aosp
+        # 同步所有必需的目录，包括 build 目录
+        repo sync -c --no-tags --no-clone-bundle -j$(nproc) \
           platform/build \
           platform/build/soong \
           platform/build/make \
+          platform/build/blueprint \
+          platform/build/kati \
           platform/device/generic/gsi \
           platform/device/generic/common \
           platform/device/gsi \
           platform/vendor/gsi \
           platform/prebuilts/build-tools \
           platform/system/core \
-          platform/frameworks/base || true
+          platform/frameworks/base \
+          platform/external/boringssl \
+          platform/external/zlib \
+          platform/external/libcxx \
+          platform/external/libcxxabi \
+          platform/external/compiler-rt \
+          platform/bionic \
+          platform/art
 
     - name: Show raw lunch output
       run: |
         cd ~/aosp
-        source build/envsetup.sh
-        echo "=========================================="
-        echo "📋 RAW LUNCH OUTPUT"
-        echo "=========================================="
-        lunch
+        # 确认 build/envsetup.sh 存在
+        if [ -f "build/envsetup.sh" ]; then
+          echo "✅ build/envsetup.sh found"
+          source build/envsetup.sh
+          echo ""
+          echo "=========================================="
+          echo "📋 RAW LUNCH OUTPUT"
+          echo "=========================================="
+          lunch
+        else
+          echo "❌ build/envsetup.sh NOT found"
+          echo "Current directory contents:"
+          ls -la
+          echo ""
+          echo "Checking build directory:"
+          ls -la build/ 2>/dev/null || echo "build directory does not exist"
+          exit 1
+        fi
