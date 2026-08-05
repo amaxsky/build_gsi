@@ -1,0 +1,57 @@
+name: Build Android 9 GSI
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: '构建目标'
+        required: true
+        default: 'gsi_arm64-userdebug'
+        type: choice
+        options:
+          - gsi_arm64-userdebug
+          - gsi_arm-userdebug
+          - gsi_x86_64-userdebug
+          - gsi_x86-userdebug
+
+env:
+  AOSP_BRANCH: 'pie-gsi'
+
+jobs:
+  build:
+    name: Build Android 9 GSI
+    runs-on: ubuntu-20.04
+    
+    steps:
+    - name: 安装依赖包
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
+          libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
+          xsltproc unzip fontconfig python3 openjdk-8-jdk repo
+
+    - name: 初始化 Repo (pie-gsi 分支)
+      run: |
+        repo init --depth=1 \
+          -u https://android.googlesource.com/platform/manifest \
+          -b ${{ env.AOSP_BRANCH }}
+
+    - name: 同步源代码
+      timeout-minutes: 360
+      run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+
+    - name: 构建 GSI
+      timeout-minutes: 360
+      run: |
+        source build/envsetup.sh
+        lunch ${{ inputs.build_target }}
+        make -j$(nproc)
+
+    - name: 上传 system.img
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-9-gsi
+        path: out/target/product/generic*/system.img
+        retention-days: 30
