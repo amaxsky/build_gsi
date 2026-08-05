@@ -16,6 +16,12 @@ jobs:
       image: ubuntu:20.04
     
     steps:
+    - name: 清理磁盘空间
+      run: |
+        df -h
+        rm -rf /__t /__w/_temp /__w/_actions 2>/dev/null || true
+        df -h
+
     - name: 安装依赖包
       run: |
         apt-get update
@@ -36,17 +42,19 @@ jobs:
           -u https://android.googlesource.com/platform/manifest \
           -b ${{ env.AOSP_BRANCH }}
 
-    - name: 同步源代码
-      timeout-minutes: 360
-      run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+    - name: 同步源代码（精简）
+      timeout-minutes: 120
+      run: |
+        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+        df -h
 
-    - name: 构建 GSI (aosp_arm64-eng)
+    - name: 构建 GSI (仅 system.img)
       shell: bash
-      timeout-minutes: 360
+      timeout-minutes: 240
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
-        make -j$(nproc)
+        make -j$(nproc) systemimage
 
     - name: 上传 system.img
       uses: actions/upload-artifact@v4
