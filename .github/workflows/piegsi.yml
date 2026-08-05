@@ -32,12 +32,6 @@ jobs:
         sudo apt-get install -y python2
         sudo ln -sf /usr/bin/python2 /usr/bin/python
 
-    - name: 替换预编译 flex
-      run: |
-        # 用系统 flex 替换 AOSP 预编译的 flex（版本太老，不兼容 22.04）
-        rm -f prebuilts/misc/linux-x86/flex/flex-2.5.39
-        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
-
     - name: 初始化 Repo
       run: |
         repo init --depth=1 \
@@ -47,6 +41,11 @@ jobs:
     - name: 同步源代码
       timeout-minutes: 120
       run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+
+    - name: 替换预编译 flex
+      run: |
+        mkdir -p prebuilts/misc/linux-x86/flex
+        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
 
     - name: 构建 GSI
       shell: bash
