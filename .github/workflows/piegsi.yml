@@ -2,18 +2,6 @@ name: Build Android 9 GSI
 
 on:
   workflow_dispatch:
-    inputs:
-      build_target:
-        description: '构建目标'
-        required: true
-        default: 'gsi_arm64-userdebug'
-        type: choice
-        options:
-          - gsi_arm64-userdebug
-          - gsi_arm-userdebug
-          - gsi_x86_64-userdebug
-          - gsi_x86-userdebug
-          - aosp_arm64-eng
 
 env:
   AOSP_BRANCH: 'pie-gsi'
@@ -31,7 +19,9 @@ jobs:
           git-core gnupg flex bison build-essential zip curl \
           zlib1g-dev libc6-dev-i386 libncurses6 x11proto-core-dev \
           libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
-          xsltproc unzip fontconfig python3 openjdk-8-jdk repo
+          xsltproc unzip fontconfig python2 python3 openjdk-8-jdk repo
+        # 设置 python 指向 python2
+        sudo ln -sf /usr/bin/python2 /usr/bin/python
 
     - name: 初始化 Repo (pie-gsi 分支)
       run: |
@@ -43,13 +33,12 @@ jobs:
       timeout-minutes: 360
       run: repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
-   
-
-    - name: 构建 GSI
+    - name: 构建 GSI (aosp_arm64-eng)
       timeout-minutes: 360
       run: |
+        export PATH=/usr/bin:$PATH
         source build/envsetup.sh
-        lunch ${{ inputs.build_target }}
+        lunch aosp_arm64-eng
         make -j$(nproc)
 
     - name: 上传 system.img
