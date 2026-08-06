@@ -19,8 +19,7 @@ jobs:
     - name: 清理宿主机空间
       run: |
         df -h /__w
-        rm -rf /__w/_temp/* /__w/_actions/* 2>/dev/null || true
-        rm -rf /__t/* 2>/dev/null || true
+        rm -rf /__w/_temp/* /__w/_actions/* /__t/* 2>/dev/null || true
         df -h /__w
 
     - name: 安装依赖包
@@ -53,29 +52,36 @@ jobs:
       run: |
         export HOME=/root
         repo sync -c -j4 --no-tags --no-clone-bundle
-        # 清理 .repo 缓存释放空间
         rm -rf .repo/project-objects .repo/projects 2>/dev/null || true
         df -h /__w
 
-    - name: 构建 GSI
+    - name: 构建 GSI (边编译边清理)
       shell: bash
       timeout-minutes: 240
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
-        make -j2 systemimage 2>&1 | while read line; do
-          echo "$line"
-        done
-        df -h /__w
-
-    - name: 检查产物
-      if: always()
-      run: |
-        find out/target/product -name "system.img" -type f
+        # 后台定时清理已编译的中间文件
+        while true; do
+          sleep 300
+          # 删除静态库（已链接进目标的不需要了）
+          find out/target/product/generic_arm64/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
+          # 删除中间目标文件（保留最近10分钟的）
+          find out/target/product/generic_arm64/obj -name "*.o" -mmin +15 -delete 2>/dev/null
+          # 删除 host 中间文件
+          find out/host/linux-x86/obj -name "*.o" -mmin +15 -delete 2>/dev/null
+          echo "清理完成，当前磁盘使用："
+          df -h /__w | grep /__w
+        done &
+        CLEANER_PID=$!
+        # 编译
+        make -j$(nproc) systemimage
+        # 编译完停掉清理进程
+        kill $CLEANER_PID 2>/dev/null
+        wait $CLEANER_PID 2>/dev/null
         df -h /__w
 
     - name: 上传 system.img
-      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: android-9-gsi
