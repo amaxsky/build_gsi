@@ -16,6 +16,13 @@ jobs:
       image: ubuntu:20.04
     
     steps:
+    - name: 清理宿主机空间
+      run: |
+        df -h /__w
+        rm -rf /__w/_temp/* /__w/_actions/* 2>/dev/null || true
+        rm -rf /__t/* 2>/dev/null || true
+        df -h /__w
+
     - name: 安装依赖包
       run: |
         apt-get update
@@ -24,6 +31,8 @@ jobs:
           zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
           libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
           xsltproc unzip fontconfig python python3 openjdk-8-jdk ca-certificates
+        apt-get clean
+        rm -rf /var/lib/apt/lists/*
 
     - name: 安装 repo
       run: |
@@ -43,7 +52,10 @@ jobs:
       timeout-minutes: 120
       run: |
         export HOME=/root
-        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+        repo sync -c -j4 --no-tags --no-clone-bundle
+        # 清理 .repo 缓存释放空间
+        rm -rf .repo/project-objects .repo/projects 2>/dev/null || true
+        df -h /__w
 
     - name: 构建 GSI
       shell: bash
@@ -51,9 +63,19 @@ jobs:
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
-        make -j$(nproc) systemimage
+        make -j2 systemimage 2>&1 | while read line; do
+          echo "$line"
+        done
+        df -h /__w
+
+    - name: 检查产物
+      if: always()
+      run: |
+        find out/target/product -name "system.img" -type f
+        df -h /__w
 
     - name: 上传 system.img
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: android-9-gsi
