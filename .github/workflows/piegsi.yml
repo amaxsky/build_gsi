@@ -48,17 +48,15 @@ jobs:
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle
         df -h
 
-    - name: 替换预编译工具
-      run: |
-        rm -rf prebuilts/misc/linux-x86/flex prebuilts/misc/linux-x86/bison
-        mkdir -p prebuilts/misc/linux-x86/flex prebuilts/misc/linux-x86/bison
-        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
-        ln -sf /usr/bin/bison prebuilts/misc/linux-x86/bison/bison
-
     - name: 构建 GSI
       shell: bash
       timeout-minutes: 240
       run: |
+        # 关键：预编译 flex 需要完全干净的 C locale，不能有任何 UTF-8
+        export LC_ALL=C
+        export LANG=C
+        export LANGUAGE=C
+        unset LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION LC_ALL LANG LANGUAGE
         source build/envsetup.sh
         lunch aosp_arm64-eng
         make -j$(nproc) systemimage
