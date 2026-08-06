@@ -46,22 +46,19 @@ jobs:
       timeout-minutes: 120
       run: |
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle
-        du -sh .repo out 2>/dev/null
         df -h
+
+    - name: 替换预编译工具
+      run: |
+        rm -rf prebuilts/misc/linux-x86/flex prebuilts/misc/linux-x86/bison
+        mkdir -p prebuilts/misc/linux-x86/flex prebuilts/misc/linux-x86/bison
+        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
+        ln -sf /usr/bin/bison prebuilts/misc/linux-x86/bison/bison
 
     - name: 构建 GSI
       shell: bash
       timeout-minutes: 240
       run: |
-        # 关键：不让 AOSP 用预编译的 flex/bison，用系统的
-        export PATH=/usr/bin:$PATH
-        # 确保 make 优先用系统 flex
-        rm -rf prebuilts/misc/linux-x86/flex
-        rm -rf prebuilts/misc/linux-x86/bison
-        mkdir -p prebuilts/misc/linux-x86/flex
-        mkdir -p prebuilts/misc/linux-x86/bison
-        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
-        ln -sf /usr/bin/bison prebuilts/misc/linux-x86/bison/bison
         source build/envsetup.sh
         lunch aosp_arm64-eng
         make -j$(nproc) systemimage
