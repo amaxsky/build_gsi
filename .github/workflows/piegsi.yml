@@ -46,22 +46,21 @@ jobs:
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle
         df -h
 
-    - name: 修复 flex locale 兼容性
+    - name: 用系统 flex 替换预编译 flex
       run: |
-        cat > /tmp/fix_locale.c << 'EOF'
-        #include <string.h>
-        char *setlocale(int category, const char *locale) { return "C"; }
-        void _nl_intern_locale_data(void) {}
+        # 备份原 flex
+        mv prebuilts/misc/linux-x86/flex/flex-2.5.39 prebuilts/misc/linux-x86/flex/flex-2.5.39.bak
+        # 创建 wrapper 脚本，调用系统 flex 但伪装成 2.5.39
+        cat > prebuilts/misc/linux-x86/flex/flex-2.5.39 << 'EOF'
+        #!/bin/bash
+        /usr/bin/flex -l "$@"
         EOF
-        gcc -shared -fPIC -o /tmp/fix_locale.so /tmp/fix_locale.c
+        chmod +x prebuilts/misc/linux-x86/flex/flex-2.5.39
 
     - name: 构建 GSI
       shell: bash
       timeout-minutes: 240
       run: |
-        export LC_ALL=C
-        export LANG=C
-        export LD_PRELOAD=/tmp/fix_locale.so
         source build/envsetup.sh
         lunch aosp_arm64-eng
         make -j$(nproc) systemimage
