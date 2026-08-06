@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:20.04
-      options: --storage-opt size=120G
     
     steps:
     - name: 安装依赖包
