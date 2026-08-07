@@ -23,7 +23,7 @@ jobs:
           git-core gnupg flex bison build-essential zip curl \
           zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
           libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
-          xsltproc unzip fontconfig python python3 openjdk-8-jdk ca-certificates
+          xsltproc unzip fontconfig python python3 openjdk-8-jdk ca-certificates procps
         apt-get clean
         rm -rf /var/lib/apt/lists/*
 
@@ -49,32 +49,47 @@ jobs:
         rm -rf .repo/project-objects .repo/projects 2>/dev/null || true
         df -h
 
-    - name: 构建 GSI + 边编译边清理
+    - name: 构建 GSI (带资源监控)
       shell: bash
       timeout-minutes: 360
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
         
+        # 资源监控后台进程
         while true; do
-          sleep 180
-          find out/target/product/generic_arm64/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
-          find out/host/linux-x86/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
-          find out/target/product/generic_arm64/obj/SHARED_LIBRARIES -name "*.o" -mmin +10 -delete 2>/dev/null
-          find out/host/linux-x86/obj/SHARED_LIBRARIES -name "*.o" -mmin +10 -delete 2>/dev/null
-          find out/target/product/generic_arm64/obj/EXECUTABLES -name "*.o" -mmin +10 -delete 2>/dev/null
-          find out/host/linux-x86/obj/EXECUTABLES -name "*.o" -mmin +10 -delete 2>/dev/null
-          find out/soong/.intermediates -name "*.o" -mmin +10 -delete 2>/dev/null
-          find out/soong/.intermediates -name "*.a" -mmin +10 -delete 2>/dev/null
-          echo "$(date): 已清理，磁盘: $(df -h /__w | tail -1 | awk '{print $5}')"
+          echo "=== $(date '+%H:%M:%S') ==="
+          echo "磁盘:"
+          df -h /__w | grep -v Filesystem
+          df -h / | grep -v Filesystem
+          echo "内存:"
+          free -h | grep -v Swap
+          echo "CPU:"
+          top -bn1 | grep "Cpu(s)" | head -1
+          echo "负载: $(uptime | awk -F'load average:' '{print $2}')"
+          echo "out 目录大小: $(du -sh out 2>/dev/null | cut -f1)"
+          echo ".repo 大小: $(du -sh .repo 2>/dev/null | cut -f1)"
+          echo ""
+          sleep 120
+        done &
+        MONITOR=$!
+        
+        # 温和清理：只删 .a
+        while true; do
+          sleep 300
+          find out/soong/.intermediates -name "*.a" -mmin +5 -delete 2>/dev/null
+          find out/target/product/generic_arm64/obj/STATIC_LIBRARIES -name "*.a" -mmin +5 -delete 2>/dev/null
+          find out/host/linux-x86/obj/STATIC_LIBRARIES -name "*.a" -mmin +5 -delete 2>/dev/null
         done &
         CLEANER=$!
         
         make -j$(nproc) systemimage
-        kill $CLEANER 2>/dev/null
+        
+        kill $MONITOR $CLEANER 2>/dev/null
         df -h
 
     - name: 上传 system.img
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: android-9-gsi
