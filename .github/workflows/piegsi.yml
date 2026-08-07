@@ -16,6 +16,9 @@ jobs:
     steps:
     - name: 安装依赖包
       run: |
+        export DEBIAN_FRONTEND=noninteractive
+        export TZ=Etc/UTC
+        ln -fs /usr/share/zoneinfo/$TZ /etc/localtime
         apt-get update
         apt-get install -y --no-install-recommends \
           git-core gnupg flex bison build-essential zip curl \
