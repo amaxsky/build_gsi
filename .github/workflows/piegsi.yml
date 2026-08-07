@@ -57,6 +57,7 @@ jobs:
         df -h
 
     - name: 构建 GSI
+      shell: bash
       timeout-minutes: 360
       run: |
         source build/envsetup.sh
