@@ -5,8 +5,6 @@ on:
 
 env:
   AOSP_BRANCH: 'pie-gsi'
-  DEBIAN_FRONTEND: noninteractive
-  TZ: Etc/UTC
 
 jobs:
   build:
@@ -23,7 +21,7 @@ jobs:
           git-core gnupg flex bison build-essential zip curl \
           zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
           libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
-          xsltproc unzip fontconfig python python3 openjdk-8-jdk ca-certificates procps
+          xsltproc unzip fontconfig python python3 openjdk-8-jdk ca-certificates
         apt-get clean
         rm -rf /var/lib/apt/lists/*
 
@@ -47,45 +45,20 @@ jobs:
         export HOME=/root
         repo sync -c -j4 --no-tags --no-clone-bundle
         rm -rf .repo/project-objects .repo/projects 2>/dev/null || true
+
+    - name: 删除不参与编译的模块
+      run: |
+        rm -rf cts/ test/ toolchain/ pdk/ sdk/ development/
+        rm -rf platform_testing/ packages/apps/Music* packages/apps/QuickSearchBox
+        rm -rf external/libcxxabi external/compiler-rt external/googletest
         df -h
 
-    - name: 构建 GSI (带资源监控)
-      shell: bash
+    - name: 构建 GSI
       timeout-minutes: 360
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
-        
-        # 资源监控后台进程
-        while true; do
-          echo "=== $(date '+%H:%M:%S') ==="
-          echo "磁盘:"
-          df -h /__w | grep -v Filesystem
-          df -h / | grep -v Filesystem
-          echo "内存:"
-          free -h | grep -v Swap
-          echo "CPU:"
-          top -bn1 | grep "Cpu(s)" | head -1
-          echo "负载: $(uptime | awk -F'load average:' '{print $2}')"
-          echo "out 目录大小: $(du -sh out 2>/dev/null | cut -f1)"
-          echo ".repo 大小: $(du -sh .repo 2>/dev/null | cut -f1)"
-          echo ""
-          sleep 120
-        done &
-        MONITOR=$!
-        
-        # 温和清理：只删 .a
-        while true; do
-          sleep 300
-          find out/soong/.intermediates -name "*.a" -mmin +5 -delete 2>/dev/null
-          find out/target/product/generic_arm64/obj/STATIC_LIBRARIES -name "*.a" -mmin +5 -delete 2>/dev/null
-          find out/host/linux-x86/obj/STATIC_LIBRARIES -name "*.a" -mmin +5 -delete 2>/dev/null
-        done &
-        CLEANER=$!
-        
         make -j$(nproc) systemimage
-        
-        kill $MONITOR $CLEANER 2>/dev/null
         df -h
 
     - name: 上传 system.img
