@@ -12,30 +12,31 @@ jobs:
   build:
     name: Build Android 9 GSI
     runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
     
     steps:
-    - name: 清理空间
-      run: |
-        df -h
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
-        df -h
-
     - name: 安装依赖包
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
+        apt-get update
+        apt-get install -y --no-install-recommends \
           git-core gnupg flex bison build-essential zip curl \
-          zlib1g-dev libc6-dev-i386 libncurses6 x11proto-core-dev \
+          zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
           libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
-          xsltproc unzip fontconfig python3 openjdk-8-jdk repo \
-          libtinfo5 libncurses5
-        sudo add-apt-repository -y ppa:deadsnakes/ppa
-        sudo apt-get update
-        sudo apt-get install -y python2
-        sudo ln -sf /usr/bin/python2 /usr/bin/python
+          xsltproc unzip fontconfig python python3 openjdk-8-jdk ca-certificates
+        apt-get clean
+        rm -rf /var/lib/apt/lists/*
+
+    - name: 安装 repo
+      run: |
+        curl https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+        chmod +x /usr/local/bin/repo
 
     - name: 初始化 Repo
       run: |
+        export HOME=/root
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
         repo init --depth=1 \
           -u https://android.googlesource.com/platform/manifest \
           -b ${{ env.AOSP_BRANCH }}
@@ -43,27 +44,40 @@ jobs:
     - name: 同步源代码
       timeout-minutes: 120
       run: |
-        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+        export HOME=/root
+        repo sync -c -j4 --no-tags --no-clone-bundle
+        rm -rf .repo/project-objects .repo/projects 2>/dev/null || true
         df -h
 
-    - name: 替换预编译 flex 并修复 FlexLexer.h
-      run: |
-        # 用系统 flex 替换
-        mv prebuilts/misc/linux-x86/flex/flex-2.5.39 prebuilts/misc/linux-x86/flex/flex-2.5.39.bak
-        ln -sf /usr/bin/flex prebuilts/misc/linux-x86/flex/flex-2.5.39
-        # 修复 FlexLexer.h：系统 flex 用指针，AOSP 老版本用引用
-        # 改 switch_streams 参数类型
-        sed -i 's/virtual void switch_streams(FLEX_STD istream\* new_in, FLEX_STD ostream\* new_out = 0)/virtual void switch_streams(FLEX_STD istream\& new_in, FLEX_STD ostream\& new_out)/' frameworks/compile/mclinker/include/mcld/Script/FlexLexer.h
-        sed -i 's/FLEX_STD istream\* yyin/FLEX_STD istream\* yyin = 0/' frameworks/compile/mclinker/include/mcld/Script/FlexLexer.h
-        sed -i 's/FLEX_STD ostream\* yyout/FLEX_STD ostream\* yyout = 0/' frameworks/compile/mclinker/include/mcld/Script/FlexLexer.h
-
-    - name: 构建 GSI
+    - name: 构建 GSI + 边编译边清理
       shell: bash
       timeout-minutes: 240
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
-        make -j$(nproc) systemimage
+        
+        # 后台清理：每3分钟删超过10分钟的中间文件
+        while true; do
+          sleep 180
+          # 删已链接的静态库
+          find out/target/product/generic_arm64/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
+          find out/host/linux-x86/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
+          # 删 SHARED_LIBRARIES 中间件
+          find out/target/product/generic_arm64/obj/SHARED_LIBRARIES -name "*.o" -mmin +10 -delete 2>/dev/null
+          find out/host/linux-x86/obj/SHARED_LIBRARIES -name "*.o" -mmin +10 -delete 2>/dev/null
+          # 删 EXECUTABLES 中间件
+          find out/target/product/generic_arm64/obj/EXECUTABLES -name "*.o" -mmin +10 -delete 2>/dev/null
+          find out/host/linux-x86/obj/EXECUTABLES -name "*.o" -mmin +10 -delete 2>/dev/null
+          # 删 soong intermediates
+          find out/soong/.intermediates -name "*.o" -mmin +10 -delete 2>/dev/null
+          find out/soong/.intermediates -name "*.a" -mmin +10 -delete 2>/dev/null
+          echo "$(date): 已清理，磁盘: $(df -h /__w | tail -1 | awk '{print $5}')"
+        done &
+        CLEANER=$!
+        
+        # 只编译 systemimage
+        make -j2 systemimage
+        kill $CLEANER 2>/dev/null
         df -h
 
     - name: 上传 system.img
