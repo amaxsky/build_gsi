@@ -42,7 +42,7 @@ jobs:
           -b ${{ env.AOSP_BRANCH }}
 
     - name: 同步源代码
-      timeout-minutes: 120
+      timeout-minutes: 180
       run: |
         export HOME=/root
         repo sync -c -j4 --no-tags --no-clone-bundle
@@ -51,32 +51,26 @@ jobs:
 
     - name: 构建 GSI + 边编译边清理
       shell: bash
-      timeout-minutes: 240
+      timeout-minutes: 360
       run: |
         source build/envsetup.sh
         lunch aosp_arm64-eng
         
-        # 后台清理：每3分钟删超过10分钟的中间文件
         while true; do
           sleep 180
-          # 删已链接的静态库
           find out/target/product/generic_arm64/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
           find out/host/linux-x86/obj/STATIC_LIBRARIES -name "*.a" -mmin +10 -delete 2>/dev/null
-          # 删 SHARED_LIBRARIES 中间件
           find out/target/product/generic_arm64/obj/SHARED_LIBRARIES -name "*.o" -mmin +10 -delete 2>/dev/null
           find out/host/linux-x86/obj/SHARED_LIBRARIES -name "*.o" -mmin +10 -delete 2>/dev/null
-          # 删 EXECUTABLES 中间件
           find out/target/product/generic_arm64/obj/EXECUTABLES -name "*.o" -mmin +10 -delete 2>/dev/null
           find out/host/linux-x86/obj/EXECUTABLES -name "*.o" -mmin +10 -delete 2>/dev/null
-          # 删 soong intermediates
           find out/soong/.intermediates -name "*.o" -mmin +10 -delete 2>/dev/null
           find out/soong/.intermediates -name "*.a" -mmin +10 -delete 2>/dev/null
           echo "$(date): 已清理，磁盘: $(df -h /__w | tail -1 | awk '{print $5}')"
         done &
         CLEANER=$!
         
-        # 只编译 systemimage
-        make -j2 systemimage
+        make -j$(nproc) systemimage
         kill $CLEANER 2>/dev/null
         df -h
 
